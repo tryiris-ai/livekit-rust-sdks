@@ -14,16 +14,15 @@
 
 use std::{
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use cxx::SharedPtr;
-use livekit_runtime::interval;
 use parking_lot::Mutex;
-use webrtc_sys::{video_frame as vf_sys, video_frame::ffi::VideoRotation, video_track as vt_sys};
+use webrtc_sys::{video_frame as vf_sys, video_track as vt_sys};
 
 use crate::{
-    video_frame::{I420Buffer, VideoBuffer, VideoFrame},
+    video_frame::{VideoBuffer, VideoFrame},
     video_source::VideoResolution,
 };
 
@@ -47,17 +46,20 @@ pub struct NativeVideoSource {
 
 struct VideoSourceInner {
     captured_frames: usize,
+    first_timestamp_epoch: Option<u64>,
+    timestamp_adjustment: Option<i64>,
 }
 
 impl NativeVideoSource {
+
     pub fn new(resolution: VideoResolution) -> NativeVideoSource {
         let source = Self {
             sys_handle: vt_sys::ffi::new_video_track_source(&vt_sys::ffi::VideoResolution::from(
                 resolution.clone(),
             )),
-            inner: Arc::new(Mutex::new(VideoSourceInner { captured_frames: 0 })),
+            inner: Arc::new(Mutex::new(VideoSourceInner { captured_frames: 0, first_timestamp_epoch: None, timestamp_adjustment: None })),
         };
-
+/* 
         livekit_runtime::spawn({
             let source = source.clone();
             let i420 = I420Buffer::new(resolution.width, resolution.height);
@@ -76,14 +78,14 @@ impl NativeVideoSource {
                     builder.pin_mut().set_rotation(VideoRotation::VideoRotation0);
                     builder.pin_mut().set_video_frame_buffer(i420.as_ref().sys_handle());
 
-                    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-                    builder.pin_mut().set_timestamp_us(now.as_micros() as i64);
+                    //let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+                    //builder.pin_mut().set_timestamp_us(now.as_micros() as i64);
 
-                    source.sys_handle.on_captured_frame(&builder.pin_mut().build());
+                    //source.sys_handle.on_captured_frame(&builder.pin_mut().build());
                 }
             }
         });
-
+*/
         source
     }
 
@@ -98,13 +100,23 @@ impl NativeVideoSource {
         let mut builder = vf_sys::ffi::new_video_frame_builder();
         builder.pin_mut().set_rotation(frame.rotation.into());
         builder.pin_mut().set_video_frame_buffer(frame.buffer.as_ref().sys_handle());
-
+        
         if frame.timestamp_us == 0 {
             // If the timestamp is set to 0, default to now
             let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
             builder.pin_mut().set_timestamp_us(now.as_micros() as i64);
         } else {
-            builder.pin_mut().set_timestamp_us(frame.timestamp_us);
+            if inner.first_timestamp_epoch.is_none() {
+                inner.first_timestamp_epoch = Some(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64);
+
+                let timestamp_adjustment = inner.first_timestamp_epoch.unwrap() as i64 - frame.timestamp_us;
+
+                inner.timestamp_adjustment = Some(timestamp_adjustment);
+            }
+            
+            let adjusted_timestamp = frame.timestamp_us + inner.timestamp_adjustment.unwrap() as i64;
+            
+            builder.pin_mut().set_timestamp_us(adjusted_timestamp);
         }
 
         self.sys_handle.on_captured_frame(&builder.pin_mut().build());

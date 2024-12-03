@@ -136,9 +136,8 @@ bool VideoTrackSource::InternalSource::on_captured_frame(
     const webrtc::VideoFrame& frame) {
   webrtc::MutexLock lock(&mutex_);
 
-  int64_t aligned_timestamp_us = timestamp_aligner_.TranslateTimestamp(
-      frame.timestamp_us(), rtc::TimeMicros());
-
+  int64_t timestamp_us = frame.timestamp_us();
+  
   rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer =
       frame.video_frame_buffer();
 
@@ -148,7 +147,7 @@ bool VideoTrackSource::InternalSource::on_captured_frame(
   }
 
   int adapted_width, adapted_height, crop_width, crop_height, crop_x, crop_y;
-  if (!AdaptFrame(buffer->width(), buffer->height(), aligned_timestamp_us,
+  if (!AdaptFrame(buffer->width(), buffer->height(), timestamp_us,
                   &adapted_width, &adapted_height, &crop_width, &crop_height,
                   &crop_x, &crop_y)) {
     return false;
@@ -169,7 +168,7 @@ bool VideoTrackSource::InternalSource::on_captured_frame(
   OnFrame(webrtc::VideoFrame::Builder()
               .set_video_frame_buffer(buffer)
               .set_rotation(rotation)
-              .set_timestamp_us(aligned_timestamp_us)
+              .set_timestamp_us(timestamp_us)
               .build());
 
   return true;

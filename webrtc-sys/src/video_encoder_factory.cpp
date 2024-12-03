@@ -49,9 +49,9 @@ using Factory = webrtc::VideoEncoderFactoryTemplate<
     webrtc::LibvpxVp9EncoderTemplateAdapter>;
 
 VideoEncoderFactory::InternalFactory::InternalFactory() {
-#ifdef __APPLE__
+/*#ifdef __APPLE__
   factories_.push_back(livekit::CreateObjCVideoEncoderFactory());
-#endif
+#endif*/
 
 #ifdef WEBRTC_ANDROID
   factories_.push_back(CreateAndroidVideoEncoderFactory());

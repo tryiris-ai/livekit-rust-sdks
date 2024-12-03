@@ -36,9 +36,11 @@
 namespace livekit {
 
 VideoDecoderFactory::VideoDecoderFactory() {
+/*
 #ifdef __APPLE__
   factories_.push_back(livekit::CreateObjCVideoDecoderFactory());
 #endif
+*/
 
 #ifdef WEBRTC_ANDROID
   factories_.push_back(CreateAndroidVideoDecoderFactory());
