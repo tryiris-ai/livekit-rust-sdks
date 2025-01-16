@@ -195,7 +195,7 @@ impl From<RtpEncodingParameters> for sys_rp::ffi::RtpEncodingParameters {
             max_framerate: value.max_framerate.unwrap_or_default(),
             network_priority: value.priority.into(),
             rid: value.rid,
-            has_scale_resolution_down_by: false,// value.scale_resolution_down_by.is_some(),
+            has_scale_resolution_down_by: false, // value.scale_resolution_down_by.is_some(),
             scale_resolution_down_by: 1.0, // value.scale_resolution_down_by.unwrap_or_default(),
             adaptive_ptime: false,
             bitrate_priority: sys_rp::DEFAULT_BITRATE_PRIORITY,
