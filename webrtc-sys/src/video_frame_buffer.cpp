@@ -268,7 +268,6 @@ std::unique_ptr<NV12Buffer> new_nv12_buffer(int width,
   return std::make_unique<NV12Buffer>(
       webrtc::NV12Buffer::Create(width, height, stride_y, stride_uv));
 }
-
 #ifndef __APPLE__
 
 std::unique_ptr<VideoFrameBuffer> new_native_buffer_from_platform_image_buffer(
@@ -284,5 +283,4 @@ PlatformImageBuffer* native_buffer_to_platform_image_buffer(
 }
 
 #endif
-
 }  // namespace livekit
