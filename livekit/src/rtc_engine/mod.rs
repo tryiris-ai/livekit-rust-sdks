@@ -25,7 +25,7 @@ use tokio::sync::{
     RwLockReadGuard as AsyncRwLockReadGuard,
 };
 
-pub use self::rtc_session::SessionStats;
+pub use self::rtc_session::{SessionStats, INITIAL_BUFFERED_AMOUNT_LOW_THRESHOLD};
 use crate::prelude::ParticipantIdentity;
 use crate::{
     id::ParticipantSid,
@@ -159,6 +159,22 @@ pub enum EngineEvent {
     LocalTrackSubscribed {
         track_sid: String,
     },
+    DataStreamHeader {
+        header: proto::data_stream::Header,
+        participant_identity: String,
+    },
+    DataStreamChunk {
+        chunk: proto::data_stream::Chunk,
+        participant_identity: String,
+    },
+    DataStreamTrailer {
+        trailer: proto::data_stream::Trailer,
+        participant_identity: String,
+    },
+    DataChannelBufferedAmountLowThresholdChanged {
+        kind: DataPacketKind,
+        threshold: u64,
+    },
 }
 
 /// Represents a running RtcSession with the ability to close the session
@@ -221,7 +237,7 @@ impl RtcEngine {
 
     pub async fn publish_data(
         &self,
-        data: &proto::DataPacket,
+        data: proto::DataPacket,
         kind: DataPacketKind,
     ) -> EngineResult<()> {
         let (session, _r_lock) = {
@@ -523,6 +539,26 @@ impl EngineInner {
             }
             SessionEvent::LocalTrackSubscribed { track_sid } => {
                 let _ = self.engine_tx.send(EngineEvent::LocalTrackSubscribed { track_sid });
+            }
+            SessionEvent::DataStreamHeader { header, participant_identity } => {
+                let _ = self
+                    .engine_tx
+                    .send(EngineEvent::DataStreamHeader { header, participant_identity });
+            }
+            SessionEvent::DataStreamChunk { chunk, participant_identity } => {
+                let _ = self
+                    .engine_tx
+                    .send(EngineEvent::DataStreamChunk { chunk, participant_identity });
+            }
+            SessionEvent::DataStreamTrailer { trailer, participant_identity } => {
+                let _ = self
+                    .engine_tx
+                    .send(EngineEvent::DataStreamTrailer { trailer, participant_identity });
+            }
+            SessionEvent::DataChannelBufferedAmountLowThresholdChanged { kind, threshold } => {
+                let _ = self.engine_tx.send(
+                    EngineEvent::DataChannelBufferedAmountLowThresholdChanged { kind, threshold },
+                );
             }
         }
         Ok(())

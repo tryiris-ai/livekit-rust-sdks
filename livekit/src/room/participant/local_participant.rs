@@ -14,7 +14,7 @@
 
 use std::{collections::HashMap, fmt::Debug, pin::Pin, sync::Arc, time::Duration};
 
-use super::{ConnectionQuality, ParticipantInner, ParticipantKind};
+use super::{ConnectionQuality, ParticipantInner, ParticipantKind, ParticipantTrackPermission};
 use crate::{
     e2ee::EncryptionType,
     options::{self, compute_video_encodings, video_layers_from_encodings, TrackPublishOptions},
@@ -71,6 +71,8 @@ struct LocalInfo {
     events: LocalEvents,
     encryption_type: EncryptionType,
     rpc_state: Mutex<RpcState>,
+    all_participants_allowed: Mutex<bool>,
+    track_permissions: Mutex<Vec<ParticipantTrackPermission>>,
 }
 
 #[derive(Clone)]
@@ -106,6 +108,8 @@ impl LocalParticipant {
                 events: LocalEvents::default(),
                 encryption_type,
                 rpc_state: Mutex::new(RpcState::new()),
+                all_participants_allowed: Mutex::new(true),
+                track_permissions: Mutex::new(vec![]),
             }),
         }
     }
@@ -377,7 +381,7 @@ impl LocalParticipant {
             ..Default::default()
         };
 
-        match self.inner.rtc_engine.publish_data(&data, DataPacketKind::Reliable).await {
+        match self.inner.rtc_engine.publish_data(data, DataPacketKind::Reliable).await {
             Ok(_) => Ok(ChatMessage::from(chat_message)),
             Err(e) => Err(Into::into(e)),
         }
@@ -403,7 +407,7 @@ impl LocalParticipant {
             ..Default::default()
         };
 
-        match self.inner.rtc_engine.publish_data(&data, DataPacketKind::Reliable).await {
+        match self.inner.rtc_engine.publish_data(data, DataPacketKind::Reliable).await {
             Ok(_) => Ok(ChatMessage::from(proto_msg)),
             Err(e) => Err(Into::into(e)),
         }
@@ -437,6 +441,19 @@ impl LocalParticipant {
         }
     }
 
+    /** internal */
+    pub async fn publish_raw_data(
+        self,
+        packet: proto::DataPacket,
+        reliable: bool,
+    ) -> RoomResult<()> {
+        let kind = match reliable {
+            true => DataPacketKind::Reliable,
+            false => DataPacketKind::Lossy,
+        };
+        self.inner.rtc_engine.publish_data(packet, kind).await.map_err(Into::into)
+    }
+
     pub async fn publish_data(&self, packet: DataPacket) -> RoomResult<()> {
         let kind = match packet.reliable {
             true => DataPacketKind::Reliable,
@@ -455,7 +472,37 @@ impl LocalParticipant {
             ..Default::default()
         };
 
-        self.inner.rtc_engine.publish_data(&data, kind).await.map_err(Into::into)
+        self.inner.rtc_engine.publish_data(data, kind).await.map_err(Into::into)
+    }
+
+    pub fn set_data_channel_buffered_amount_low_threshold(
+        &self,
+        threshold: u64,
+        kind: DataPacketKind,
+    ) -> RoomResult<()> {
+        self.inner
+            .rtc_engine
+            .session()
+            .set_data_channel_buffered_amount_low_threshold(threshold, kind);
+        Ok(())
+    }
+
+    pub fn data_channel_buffered_amount_low_threshold(
+        &self,
+        kind: DataPacketKind,
+    ) -> RoomResult<u64> {
+        Ok(self.inner.rtc_engine.session().data_channel_buffered_amount_low_threshold(kind))
+    }
+
+    pub async fn set_track_subscription_permissions(
+        &self,
+        all_participants_allowed: bool,
+        permissions: Vec<ParticipantTrackPermission>,
+    ) -> RoomResult<()> {
+        *self.local.track_permissions.lock() = permissions;
+        *self.local.all_participants_allowed.lock() = all_participants_allowed;
+        self.update_track_subscription_permissions().await;
+        Ok(())
     }
 
     pub async fn publish_transcription(&self, packet: Transcription) -> RoomResult<()> {
@@ -480,11 +527,7 @@ impl LocalParticipant {
             value: Some(proto::data_packet::Value::Transcription(transcription_packet)),
             ..Default::default()
         };
-        self.inner
-            .rtc_engine
-            .publish_data(&data, DataPacketKind::Reliable)
-            .await
-            .map_err(Into::into)
+        self.inner.rtc_engine.publish_data(data, DataPacketKind::Reliable).await.map_err(Into::into)
     }
 
     pub async fn publish_dtmf(&self, dtmf: SipDTMF) -> RoomResult<()> {
@@ -498,11 +541,7 @@ impl LocalParticipant {
             ..Default::default()
         };
 
-        self.inner
-            .rtc_engine
-            .publish_data(&data, DataPacketKind::Reliable)
-            .await
-            .map_err(Into::into)
+        self.inner.rtc_engine.publish_data(data, DataPacketKind::Reliable).await.map_err(Into::into)
     }
 
     async fn publish_rpc_request(&self, rpc_request: RpcRequest) -> RoomResult<()> {
@@ -522,11 +561,7 @@ impl LocalParticipant {
             ..Default::default()
         };
 
-        self.inner
-            .rtc_engine
-            .publish_data(&data, DataPacketKind::Reliable)
-            .await
-            .map_err(Into::into)
+        self.inner.rtc_engine.publish_data(data, DataPacketKind::Reliable).await.map_err(Into::into)
     }
 
     async fn publish_rpc_response(&self, rpc_response: RpcResponse) -> RoomResult<()> {
@@ -550,11 +585,7 @@ impl LocalParticipant {
             ..Default::default()
         };
 
-        self.inner
-            .rtc_engine
-            .publish_data(&data, DataPacketKind::Reliable)
-            .await
-            .map_err(Into::into)
+        self.inner.rtc_engine.publish_data(data, DataPacketKind::Reliable).await.map_err(Into::into)
     }
 
     async fn publish_rpc_ack(&self, rpc_ack: RpcAck) -> RoomResult<()> {
@@ -568,11 +599,28 @@ impl LocalParticipant {
             ..Default::default()
         };
 
+        self.inner.rtc_engine.publish_data(data, DataPacketKind::Reliable).await.map_err(Into::into)
+    }
+
+    pub(crate) async fn update_track_subscription_permissions(&self) {
+        let all_participants_allowed = *self.local.all_participants_allowed.lock();
+        let track_permissions = self
+            .local
+            .track_permissions
+            .lock()
+            .iter()
+            .map(|p| proto::TrackPermission::from(p.clone()))
+            .collect();
+
         self.inner
             .rtc_engine
-            .publish_data(&data, DataPacketKind::Reliable)
-            .await
-            .map_err(Into::into)
+            .send_request(proto::signal_request::Message::SubscriptionPermission(
+                proto::SubscriptionPermission {
+                    all_participants: all_participants_allowed,
+                    track_permissions,
+                },
+            ))
+            .await;
     }
 
     pub fn get_track_publication(&self, sid: &TrackSid) -> Option<LocalTrackPublication> {
@@ -635,6 +683,10 @@ impl LocalParticipant {
 
     pub fn kind(&self) -> ParticipantKind {
         self.inner.info.read().kind
+    }
+
+    pub fn disconnect_reason(&self) -> DisconnectReason {
+        self.inner.info.read().disconnect_reason
     }
 
     pub async fn perform_rpc(&self, data: PerformRpcData) -> Result<String, RpcError> {

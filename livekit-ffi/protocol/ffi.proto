@@ -46,7 +46,7 @@ import "rpc.proto";
 //   that it receives from the server.
 //
 // Therefore, the ffi client is easier to implement if there is less handles to manage.
-// 
+//
 // - We are mainly using FfiHandle on info messages (e.g: RoomInfo, TrackInfo, etc...)
 //   For this reason, info are only sent once, at creation (We're not using them for updates, we can infer them from
 //   events on the client implementation).
@@ -71,7 +71,6 @@ message FfiRequest {
     GetSessionStatsRequest get_session_stats = 12;
     PublishTranscriptionRequest publish_transcription = 13;
     PublishSipDtmfRequest publish_sip_dtmf = 14;
-    
 
     // Track
     CreateVideoTrackRequest create_video_track = 15;
@@ -79,8 +78,9 @@ message FfiRequest {
     LocalTrackMuteRequest local_track_mute = 17;
     EnableRemoteTrackRequest enable_remote_track = 18;
     GetStatsRequest get_stats = 19;
+    SetTrackSubscriptionPermissionsRequest set_track_subscription_permissions = 48;
 
-// Video
+    // Video
     NewVideoStreamRequest new_video_stream = 20;
     NewVideoSourceRequest new_video_source = 21;
     CaptureVideoFrameRequest capture_video_frame = 22;
@@ -111,6 +111,16 @@ message FfiRequest {
     // Track Publication
     EnableRemoteTrackPublicationRequest enable_remote_track_publication = 42;
     UpdateRemoteTrackPublicationDimensionRequest update_remote_track_publication_dimension = 43;
+
+    // Data Streams
+    SendStreamHeaderRequest send_stream_header = 44;
+    SendStreamChunkRequest send_stream_chunk = 45;
+    SendStreamTrailerRequest send_stream_trailer = 46;
+
+    // Data Channel
+    SetDataChannelBufferedAmountLowThresholdRequest set_data_channel_buffered_amount_low_threshold = 47;
+
+    // NEXT_ID: 49
   }
 }
 
@@ -139,6 +149,7 @@ message FfiResponse {
     LocalTrackMuteResponse local_track_mute = 17;
     EnableRemoteTrackResponse enable_remote_track = 18;
     GetStatsResponse get_stats = 19;
+    SetTrackSubscriptionPermissionsResponse set_track_subscription_permissions = 47;
 
     // Video
     NewVideoStreamResponse new_video_stream = 20;
@@ -168,6 +179,16 @@ message FfiResponse {
     // Track Publication
     EnableRemoteTrackPublicationResponse enable_remote_track_publication = 41;
     UpdateRemoteTrackPublicationDimensionResponse update_remote_track_publication_dimension = 42;
+
+    // Data Streams
+    SendStreamHeaderResponse send_stream_header = 43;
+    SendStreamChunkResponse send_stream_chunk = 44;
+    SendStreamTrailerResponse send_stream_trailer = 45;
+
+    // Data Channel
+    SetDataChannelBufferedAmountLowThresholdResponse set_data_channel_buffered_amount_low_threshold = 46;
+
+    // NEXT_ID: 48
   }
 }
 
@@ -199,6 +220,9 @@ message FfiEvent {
     SendChatMessageCallback chat_message = 22;
     PerformRpcCallback perform_rpc = 23;
     RpcMethodInvocationEvent rpc_method_invocation = 24;
+    SendStreamHeaderCallback send_stream_header = 25;
+    SendStreamChunkCallback send_stream_chunk = 26;
+    SendStreamTrailerCallback send_stream_trailer = 27;
   }
 }
 

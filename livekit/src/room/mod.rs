@@ -31,10 +31,7 @@ use parking_lot::RwLock;
 pub use proto::DisconnectReason;
 use proto::{promise::Promise, SignalTarget};
 use thiserror::Error;
-use tokio::{
-    signal,
-    sync::{mpsc, oneshot, Mutex as AsyncMutex},
-};
+use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex};
 
 pub use self::{
     e2ee::{manager::E2eeManager, E2eeOptions},
@@ -46,7 +43,7 @@ use crate::{
     prelude::*,
     rtc_engine::{
         EngineError, EngineEvent, EngineEvents, EngineOptions, EngineResult, RtcEngine,
-        SessionStats,
+        SessionStats, INITIAL_BUFFERED_AMOUNT_LOW_THRESHOLD,
     },
 };
 
@@ -171,6 +168,18 @@ pub enum RoomEvent {
         message: ChatMessage,
         participant: Option<RemoteParticipant>,
     },
+    StreamHeaderReceived {
+        header: proto::data_stream::Header,
+        participant_identity: String,
+    },
+    StreamChunkReceived {
+        chunk: proto::data_stream::Chunk,
+        participant_identity: String,
+    },
+    StreamTrailerReceived {
+        trailer: proto::data_stream::Trailer,
+        participant_identity: String,
+    },
     E2eeStateChanged {
         participant: Participant,
         state: EncryptionState,
@@ -187,6 +196,10 @@ pub enum RoomEvent {
     },
     Reconnecting,
     Reconnected,
+    DataChannelBufferedAmountLowThresholdChanged {
+        kind: DataPacketKind,
+        threshold: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -351,6 +364,19 @@ impl Debug for Room {
 struct RoomInfo {
     metadata: String,
     state: ConnectionState,
+    lossy_dc_options: DataChannelOptions,
+    reliable_dc_options: DataChannelOptions,
+}
+
+#[derive(Clone)]
+pub struct DataChannelOptions {
+    pub buffered_amount_low_threshold: u64,
+}
+
+impl Default for DataChannelOptions {
+    fn default() -> Self {
+        Self { buffered_amount_low_threshold: INITIAL_BUFFERED_AMOUNT_LOW_THRESHOLD }
+    }
 }
 
 pub(crate) struct RoomSession {
@@ -497,6 +523,8 @@ impl Room {
             info: RwLock::new(RoomInfo {
                 state: ConnectionState::Disconnected,
                 metadata: room_info.metadata,
+                lossy_dc_options: Default::default(),
+                reliable_dc_options: Default::default(),
             }),
             remote_participants: Default::default(),
             active_speakers: Default::default(),
@@ -614,6 +642,13 @@ impl Room {
     pub fn e2ee_manager(&self) -> &E2eeManager {
         &self.inner.e2ee_manager
     }
+
+    pub fn data_channel_options(&self, kind: DataPacketKind) -> DataChannelOptions {
+        match kind {
+            DataPacketKind::Lossy => self.inner.info.read().lossy_dc_options.clone(),
+            DataPacketKind::Reliable => self.inner.info.read().reliable_dc_options.clone(),
+        }
+    }
 }
 
 impl RoomSession {
@@ -696,16 +731,19 @@ impl RoomSession {
                     log::warn!("Received RPC request with null caller identity");
                     return Ok(());
                 }
-                self.local_participant
-                    .handle_incoming_rpc_request(
-                        caller_identity.unwrap(),
-                        request_id,
-                        method,
-                        payload,
-                        response_timeout,
-                        version,
-                    )
-                    .await;
+                let local_participant = self.local_participant.clone();
+                livekit_runtime::spawn(async move {
+                    local_participant
+                        .handle_incoming_rpc_request(
+                            caller_identity.unwrap(),
+                            request_id,
+                            method,
+                            payload,
+                            response_timeout,
+                            version,
+                        )
+                        .await;
+                });
             }
             EngineEvent::RpcResponse { request_id, payload, error } => {
                 self.local_participant.handle_incoming_rpc_response(request_id, payload, error);
@@ -719,6 +757,18 @@ impl RoomSession {
             }
             EngineEvent::LocalTrackSubscribed { track_sid } => {
                 self.handle_track_subscribed(track_sid)
+            }
+            EngineEvent::DataStreamHeader { header, participant_identity } => {
+                self.handle_data_stream_header(header, participant_identity);
+            }
+            EngineEvent::DataStreamChunk { chunk, participant_identity } => {
+                self.handle_data_stream_chunk(chunk, participant_identity);
+            }
+            EngineEvent::DataStreamTrailer { trailer, participant_identity } => {
+                self.handle_data_stream_trailer(trailer, participant_identity);
+            }
+            EngineEvent::DataChannelBufferedAmountLowThresholdChanged { kind, threshold } => {
+                self.handle_data_channel_buffered_low_threshold_change(kind, threshold);
             }
             _ => {}
         }
@@ -783,6 +833,8 @@ impl RoomSession {
             let remote_participant = self.get_participant_by_sid(&participant_sid);
             if pi.state == proto::participant_info::State::Disconnected as i32 {
                 if let Some(remote_participant) = remote_participant {
+                    // need to update to get the correct disconnect reason
+                    remote_participant.update_info(pi.clone());
                     self.clone().handle_participant_disconnect(remote_participant)
                 } else {
                     // Ignore, just received the ParticipantInfo but the participant is already
@@ -1027,6 +1079,11 @@ impl RoomSession {
         self.dispatcher.dispatch(&RoomEvent::Reconnected);
 
         let _ = tx.send(());
+
+        let local_participant = self.local_participant.clone();
+        livekit_runtime::spawn(async move {
+            local_participant.update_track_subscription_permissions().await;
+        });
     }
 
     fn handle_signal_resumed(
@@ -1067,6 +1124,9 @@ impl RoomSession {
         // At this time we know that the RtcSession is successfully restarted
         let published_tracks = self.local_participant.track_publications();
 
+        // we need to update the track subscription permissions after reconnection
+        let local_participant = self.local_participant.clone();
+
         // Spawining a new task because we need to wait for the RtcEngine to close the reconnection
         // lock.
         livekit_runtime::spawn({
@@ -1101,6 +1161,8 @@ impl RoomSession {
 
                 // Wait for the tracks to be republished before sending the Connect event
                 while set.join_next().await.is_some() {}
+
+                local_participant.update_track_subscription_permissions().await;
 
                 session.update_connection_state(ConnectionState::Connected);
                 session.dispatcher.dispatch(&RoomEvent::Reconnected);
@@ -1227,6 +1289,51 @@ impl RoomSession {
             track_publication,
             segments,
         });
+    }
+
+    fn handle_data_stream_header(
+        &self,
+        header: proto::data_stream::Header,
+        participant_identity: String,
+    ) {
+        let event = RoomEvent::StreamHeaderReceived { header, participant_identity };
+        self.dispatcher.dispatch(&event);
+    }
+
+    fn handle_data_stream_chunk(
+        &self,
+        chunk: proto::data_stream::Chunk,
+        participant_identity: String,
+    ) {
+        let event = RoomEvent::StreamChunkReceived { chunk, participant_identity };
+        self.dispatcher.dispatch(&event);
+    }
+
+    fn handle_data_stream_trailer(
+        &self,
+        trailer: proto::data_stream::Trailer,
+        participant_identity: String,
+    ) {
+        let event = RoomEvent::StreamTrailerReceived { trailer, participant_identity };
+        self.dispatcher.dispatch(&event);
+    }
+
+    fn handle_data_channel_buffered_low_threshold_change(
+        &self,
+        kind: DataPacketKind,
+        threshold: u64,
+    ) {
+        let mut info = self.info.write();
+        match kind {
+            DataPacketKind::Lossy => {
+                info.lossy_dc_options.buffered_amount_low_threshold = threshold;
+            }
+            DataPacketKind::Reliable => {
+                info.reliable_dc_options.buffered_amount_low_threshold = threshold;
+            }
+        }
+        let event = RoomEvent::DataChannelBufferedAmountLowThresholdChanged { kind, threshold };
+        self.dispatcher.dispatch(&event);
     }
 
     /// Create a new participant

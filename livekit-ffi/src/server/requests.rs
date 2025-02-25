@@ -67,7 +67,7 @@ fn on_disconnect(
         let ffi_room =
             server.retrieve_handle::<room::FfiRoom>(disconnect.room_handle).unwrap().clone();
 
-        ffi_room.close().await;
+        ffi_room.close(server).await;
 
         let _ =
             server.send_event(proto::ffi_event::Message::Disconnect(proto::DisconnectCallback {
@@ -234,6 +234,38 @@ fn on_edit_chat_message(
         .clone();
 
     Ok(ffi_participant.room.edit_chat_message(server, edit_chat_message))
+}
+
+fn on_send_stream_header(
+    server: &'static FfiServer,
+    stream_header_message: proto::SendStreamHeaderRequest,
+) -> FfiResult<proto::SendStreamHeaderResponse> {
+    let ffi_participant = server
+        .retrieve_handle::<FfiParticipant>(stream_header_message.local_participant_handle)?
+        .clone();
+
+    Ok(ffi_participant.room.send_stream_header(server, stream_header_message))
+}
+
+fn on_send_stream_chunk(
+    server: &'static FfiServer,
+    stream_chunk_message: proto::SendStreamChunkRequest,
+) -> FfiResult<proto::SendStreamChunkResponse> {
+    let ffi_participant = server
+        .retrieve_handle::<FfiParticipant>(stream_chunk_message.local_participant_handle)?
+        .clone();
+
+    Ok(ffi_participant.room.send_stream_chunk(server, stream_chunk_message))
+}
+
+fn on_send_stream_trailer(
+    server: &'static FfiServer,
+    stream_trailer_message: proto::SendStreamTrailerRequest,
+) -> FfiResult<proto::SendStreamTrailerResponse> {
+    let ffi_participant = server
+        .retrieve_handle::<FfiParticipant>(stream_trailer_message.local_participant_handle)?
+        .clone();
+    Ok(ffi_participant.room.send_stream_trailer(server, stream_trailer_message))
 }
 
 /// Create a new video track from a source
@@ -873,6 +905,30 @@ fn on_rpc_method_invocation_response(
     Ok(proto::RpcMethodInvocationResponseResponse { error })
 }
 
+fn on_set_data_channel_buffered_amount_low_threshold(
+    server: &'static FfiServer,
+    set_data_channel_buffered_amount_low_threshold: proto::SetDataChannelBufferedAmountLowThresholdRequest,
+) -> FfiResult<proto::SetDataChannelBufferedAmountLowThresholdResponse> {
+    let ffi_participant = server
+        .retrieve_handle::<FfiParticipant>(
+            set_data_channel_buffered_amount_low_threshold.local_participant_handle,
+        )?
+        .clone();
+    Ok(ffi_participant.room.set_data_channel_buffered_amount_low_threshold(
+        set_data_channel_buffered_amount_low_threshold,
+    ))
+}
+
+fn on_set_track_subscription_permissions(
+    server: &'static FfiServer,
+    set_permissions: proto::SetTrackSubscriptionPermissionsRequest,
+) -> FfiResult<proto::SetTrackSubscriptionPermissionsResponse> {
+    let ffi_participant =
+        server.retrieve_handle::<FfiParticipant>(set_permissions.local_participant_handle)?.clone();
+
+    Ok(ffi_participant.room.set_track_subscription_permissions(server, set_permissions))
+}
+
 #[allow(clippy::field_reassign_with_default)] // Avoid uggly format
 pub fn handle_request(
     server: &'static FfiServer,
@@ -1033,6 +1089,27 @@ pub fn handle_request(
         proto::ffi_request::Message::UpdateRemoteTrackPublicationDimension(request) => {
             proto::ffi_response::Message::UpdateRemoteTrackPublicationDimension(
                 on_update_remote_track_publication_dimension(server, request)?,
+            )
+        }
+        proto::ffi_request::Message::SendStreamHeader(request) => {
+            proto::ffi_response::Message::SendStreamHeader(on_send_stream_header(server, request)?)
+        }
+        proto::ffi_request::Message::SendStreamChunk(request) => {
+            proto::ffi_response::Message::SendStreamChunk(on_send_stream_chunk(server, request)?)
+        }
+        proto::ffi_request::Message::SendStreamTrailer(request) => {
+            proto::ffi_response::Message::SendStreamTrailer(on_send_stream_trailer(
+                server, request,
+            )?)
+        }
+        proto::ffi_request::Message::SetDataChannelBufferedAmountLowThreshold(request) => {
+            proto::ffi_response::Message::SetDataChannelBufferedAmountLowThreshold(
+                on_set_data_channel_buffered_amount_low_threshold(server, request)?,
+            )
+        }
+        proto::ffi_request::Message::SetTrackSubscriptionPermissions(request) => {
+            proto::ffi_response::Message::SetTrackSubscriptionPermissions(
+                on_set_track_subscription_permissions(server, request)?,
             )
         }
     });

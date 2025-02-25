@@ -95,6 +95,9 @@ impl From<DisconnectReason> for proto::DisconnectReason {
             DisconnectReason::Migration => Self::Migration,
             DisconnectReason::SignalClose => Self::SignalClose,
             DisconnectReason::RoomClosed => Self::RoomClosed,
+            DisconnectReason::UserUnavailable => Self::UserUnavailable,
+            DisconnectReason::UserRejected => Self::UserRejected,
+            DisconnectReason::SipTrunkFailure => Self::SipTrunkFailure,
         }
     }
 }
@@ -249,6 +252,12 @@ impl From<&FfiRoom> for proto::RoomInfo {
             sid: room.maybe_sid().map(|x| x.to_string()),
             name: room.name(),
             metadata: room.metadata(),
+            lossy_dc_buffered_amount_low_threshold: room
+                .data_channel_options(DataPacketKind::Lossy)
+                .buffered_amount_low_threshold,
+            reliable_dc_buffered_amount_low_threshold: room
+                .data_channel_options(DataPacketKind::Reliable)
+                .buffered_amount_low_threshold,
         }
     }
 }
@@ -276,5 +285,110 @@ impl From<livekit::ChatMessage> for proto::ChatMessage {
             deleted: msg.deleted.into(),
             generated: msg.generated.into(),
         }
+    }
+}
+
+impl From<livekit_protocol::data_stream::Header> for proto::data_stream::Header {
+    fn from(msg: livekit_protocol::data_stream::Header) -> Self {
+        let content_header = match msg.content_header {
+            Some(livekit_protocol::data_stream::header::ContentHeader::TextHeader(text_header)) => {
+                Some(proto::data_stream::header::ContentHeader::TextHeader(
+                    proto::data_stream::TextHeader {
+                        operation_type: text_header.operation_type,
+                        version: Some(text_header.version),
+                        reply_to_stream_id: Some(text_header.reply_to_stream_id),
+                        attached_stream_ids: text_header.attached_stream_ids,
+                        generated: Some(text_header.generated),
+                    },
+                ))
+            }
+            Some(livekit_protocol::data_stream::header::ContentHeader::ByteHeader(byte_header)) => {
+                Some(proto::data_stream::header::ContentHeader::ByteHeader(
+                    proto::data_stream::ByteHeader { name: byte_header.name },
+                ))
+            }
+            None => None,
+        };
+
+        proto::data_stream::Header {
+            stream_id: msg.stream_id,
+            timestamp: msg.timestamp,
+            topic: msg.topic,
+            mime_type: msg.mime_type,
+            total_length: msg.total_length,
+            attributes: msg.attributes,
+            content_header,
+        }
+    }
+}
+
+impl From<proto::data_stream::Header> for livekit_protocol::data_stream::Header {
+    fn from(msg: proto::data_stream::Header) -> Self {
+        let content_header = match msg.content_header {
+            Some(proto::data_stream::header::ContentHeader::TextHeader(text_header)) => {
+                Some(livekit_protocol::data_stream::header::ContentHeader::TextHeader(
+                    livekit_protocol::data_stream::TextHeader {
+                        operation_type: text_header.operation_type,
+                        version: text_header.version.unwrap_or_default(),
+                        reply_to_stream_id: text_header.reply_to_stream_id.unwrap_or_default(),
+                        attached_stream_ids: text_header.attached_stream_ids,
+                        generated: text_header.generated.unwrap_or(false),
+                    },
+                ))
+            }
+            Some(proto::data_stream::header::ContentHeader::ByteHeader(byte_header)) => {
+                Some(livekit_protocol::data_stream::header::ContentHeader::ByteHeader(
+                    livekit_protocol::data_stream::ByteHeader { name: byte_header.name },
+                ))
+            }
+            None => None,
+        };
+
+        livekit_protocol::data_stream::Header {
+            stream_id: msg.stream_id,
+            timestamp: msg.timestamp,
+            topic: msg.topic,
+            mime_type: msg.mime_type,
+            total_length: msg.total_length,
+            attributes: msg.attributes,
+            content_header,
+            encryption_type: 0,
+        }
+    }
+}
+
+impl From<livekit_protocol::data_stream::Chunk> for proto::data_stream::Chunk {
+    fn from(msg: livekit_protocol::data_stream::Chunk) -> Self {
+        proto::data_stream::Chunk {
+            stream_id: msg.stream_id,
+            content: msg.content,
+            chunk_index: msg.chunk_index,
+            version: Some(msg.version),
+            iv: msg.iv,
+        }
+    }
+}
+
+impl From<proto::data_stream::Chunk> for livekit_protocol::data_stream::Chunk {
+    fn from(msg: proto::data_stream::Chunk) -> Self {
+        livekit_protocol::data_stream::Chunk {
+            stream_id: msg.stream_id,
+            content: msg.content,
+            chunk_index: msg.chunk_index,
+            version: msg.version.unwrap_or(0),
+            iv: msg.iv,
+        }
+    }
+}
+
+impl From<livekit_protocol::data_stream::Trailer> for proto::data_stream::Trailer {
+    fn from(msg: livekit_protocol::data_stream::Trailer) -> Self {
+        Self { stream_id: msg.stream_id, reason: msg.reason, attributes: msg.attributes }
+    }
+}
+
+impl From<proto::data_stream::Trailer> for livekit_protocol::data_stream::Trailer {
+    fn from(msg: proto::data_stream::Trailer) -> Self {
+        Self { stream_id: msg.stream_id, reason: msg.reason, attributes: msg.attributes }
     }
 }
