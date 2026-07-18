@@ -146,8 +146,8 @@ impl From<RtpParameters> for sys_rp::ffi::RtpParameters {
             rtcp: value.rtcp.into(),
             transaction_id: "".to_string(),
             mid: "".to_string(),
-            has_degradation_preference: false,
-            degradation_preference: sys_rp::ffi::DegradationPreference::Balanced,
+            has_degradation_preference: true,
+            degradation_preference: sys_rp::ffi::DegradationPreference::MaintainFramerate,
         }
     }
 }
@@ -195,16 +195,16 @@ impl From<RtpEncodingParameters> for sys_rp::ffi::RtpEncodingParameters {
             max_framerate: value.max_framerate.unwrap_or_default(),
             network_priority: value.priority.into(),
             rid: value.rid,
-            has_scale_resolution_down_by: value.scale_resolution_down_by.is_some(),
-            scale_resolution_down_by: value.scale_resolution_down_by.unwrap_or_default(),
+            has_scale_resolution_down_by: false, // value.scale_resolution_down_by.is_some(),
+            scale_resolution_down_by: 1.0, // value.scale_resolution_down_by.unwrap_or_default(),
             adaptive_ptime: false,
             bitrate_priority: sys_rp::DEFAULT_BITRATE_PRIORITY,
-            has_min_bitrate_bps: false,
-            min_bitrate_bps: 0,
+            has_min_bitrate_bps: value.max_bitrate.is_some(),
+            min_bitrate_bps: value.max_bitrate.unwrap_or_default() as i32,
             has_num_temporal_layers: false,
             num_temporal_layers: 0,
             has_scalability_mode: false,
-            scalability_mode: "".to_string(),
+            scalability_mode: "NONE".to_string(),
             has_ssrc: false,
             ssrc: 0,
         }
