@@ -85,7 +85,10 @@ serde_json = { workspace = true, optional = true }
 base64 = { version = "0.21", optional = true, features = ["std"] }
 
 # access_token & services
-jsonwebtoken = { version = "9", default-features = false, optional = true }
+# jsonwebtoken 10 requires choosing an explicit crypto backend feature;
+# rust_crypto keeps the pure-Rust HMAC path used for HS256 tokens without
+# pulling in aws-lc-rs (which needs cmake/NASM on some CI targets).
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"], optional = true }
 
 # signal_client
 livekit-runtime = { workspace = true, optional = true}
