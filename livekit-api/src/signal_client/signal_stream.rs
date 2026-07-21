@@ -101,7 +101,9 @@ impl SignalStream {
         token: &str,
     ) -> SignalResult<(Self, mpsc::UnboundedReceiver<Box<proto::signal_response::Message>>)> {
         log::info!("connecting to {}", url);
-        let mut request = url.clone().into_client_request()?;
+        // tungstenite 0.21+ dropped its `url` crate integration; IntoClientRequest
+        // is now implemented for string/Uri types, so convert through &str.
+        let mut request = url.as_str().into_client_request()?;
         let auth_header = HeaderValue::from_str(&format!("Bearer {token}"))
             .map_err(|_| SignalError::TokenFormat)?;
         request.headers_mut().insert(AUTHORIZATION, auth_header);
@@ -228,42 +230,47 @@ impl SignalStream {
                             use std::sync::Arc;
                             use tokio_rustls::{rustls, TlsConnector};
 
-                            // Load native root certificates
+                            // Load native root certificates.
+                            // rustls-native-certs 0.8 returns a CertificateResult that
+                            // carries both the certs it could load and per-cert errors,
+                            // instead of the 0.6-era Result<Vec<_>>. Treat "no certs at
+                            // all" as fatal (TLS verification would be impossible), but
+                            // tolerate partial per-cert load errors like the platform
+                            // trust store does.
                             let mut root_store = rustls::RootCertStore::empty();
-                            match rustls_native_certs::load_native_certs() {
-                                Ok(certs) => {
-                                    let roots: Vec<rustls::Certificate> = certs
-                                        .into_iter()
-                                        .map(|cert| rustls::Certificate(cert.0))
-                                        .collect();
-
-                                    for root in roots {
-                                        root_store.add(&root).map_err(|e| {
-                                            WsError::Io(io::Error::new(
-                                                io::ErrorKind::Other,
-                                                format!(
-                                                    "Failed to parse root certificate: {:?}",
-                                                    e
-                                                ),
-                                            ))
-                                        })?;
-                                    }
-                                }
-                                Err(e) => {
-                                    return Err(WsError::Io(io::Error::new(
+                            let loaded = rustls_native_certs::load_native_certs();
+                            if loaded.certs.is_empty() {
+                                return Err(WsError::Io(io::Error::new(
+                                    io::ErrorKind::Other,
+                                    format!(
+                                        "Could not load native root certificates: {:?}",
+                                        loaded.errors
+                                    ),
+                                ))
+                                .into());
+                            }
+                            for cert in loaded.certs {
+                                root_store.add(cert).map_err(|e| {
+                                    WsError::Io(io::Error::new(
                                         io::ErrorKind::Other,
-                                        format!("Could not load native root certificates: {}", e),
+                                        format!("Failed to parse root certificate: {:?}", e),
                                     ))
-                                    .into());
-                                }
+                                })?;
                             }
 
+                            // rustls 0.23: safe defaults are implicit in builder();
+                            // the crypto provider is ring (see Cargo.toml tokio-rustls
+                            // feature pin).
                             let tls_config = rustls::ClientConfig::builder()
-                                .with_safe_defaults()
                                 .with_root_certificates(root_store)
                                 .with_no_client_auth();
 
-                            let server_name = rustls::ServerName::try_from(host).map_err(|_| {
+                            // ServerName moved to rustls::pki_types and the connector
+                            // needs an owned ('static) name.
+                            let server_name = rustls::pki_types::ServerName::try_from(
+                                host.to_string(),
+                            )
+                            .map_err(|_| {
                                 WsError::Io(io::Error::new(
                                     io::ErrorKind::InvalidInput,
                                     format!("Invalid DNS name: {}", host),
@@ -359,7 +366,10 @@ impl SignalStream {
                 InternalMessage::Signal { signal, response_chn } => {
                     let data = proto::SignalRequest { message: Some(signal) }.encode_to_vec();
 
-                    if let Err(err) = ws_writer.send(Message::Binary(data)).await {
+                    // .into() bridges the payload type across the two websocket
+                    // backends: tungstenite 0.30 (tokio path) wants Bytes, while
+                    // tungstenite 0.21 (async-std path) wants Vec<u8>.
+                    if let Err(err) = ws_writer.send(Message::Binary(data.into())).await {
                         let _ = response_chn.send(Err(err.into()));
                         break;
                     }
@@ -367,7 +377,8 @@ impl SignalStream {
                     let _ = response_chn.send(Ok(()));
                 }
                 InternalMessage::Pong { ping_data } => {
-                    if let Err(err) = ws_writer.send(Message::Pong(ping_data)).await {
+                    // Same payload-type bridge as Binary above (Bytes vs Vec<u8>).
+                    if let Err(err) = ws_writer.send(Message::Pong(ping_data.into())).await {
                         log::error!("failed to send pong message: {:?}", err);
                     }
                 }
@@ -390,7 +401,9 @@ impl SignalStream {
         while let Some(msg) = ws_reader.next().await {
             match msg {
                 Ok(Message::Binary(data)) => {
-                    let res = proto::SignalResponse::decode(data.as_slice())
+                    // &data[..] works for both payload types (Bytes and Vec<u8>
+                    // both deref to [u8]).
+                    let res = proto::SignalResponse::decode(&data[..])
                         .expect("failed to decode SignalResponse");
 
                     if let Some(msg) = res.message {
@@ -398,7 +411,9 @@ impl SignalStream {
                     }
                 }
                 Ok(Message::Ping(data)) => {
-                    let _ = internal_tx.send(InternalMessage::Pong { ping_data: data }).await;
+                    // Payload-type bridge (Bytes vs Vec<u8>), see write_task.
+                    let _ =
+                        internal_tx.send(InternalMessage::Pong { ping_data: data.into() }).await;
                     continue;
                 }
                 Ok(Message::Close(close)) => {
